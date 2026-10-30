@@ -101,6 +101,12 @@
         </div>
         <div id="successCard" class="hidden bg-emerald-600 p-8 rounded-[2.5rem] text-white shadow-2xl text-center">
             <p id="res-name-full" class="text-xs font-bold opacity-80 mb-6 break-all"></p>
+            <p class="text-xs opacity-80 mb-4">切换到「发送」即可转发本次内容</p>
+            <div id="textResult" class="hidden mb-4">
+                <textarea id="receivedText" aria-label="接收到的文本" readonly spellcheck="false" rows="8" class="w-full p-4 rounded-2xl bg-white text-slate-900 text-left text-sm max-h-96"></textarea>
+                <button id="copyBtn" onclick="copyReceivedText()" class="w-full mt-4 py-4 bg-white text-emerald-700 rounded-2xl font-black">复制文本</button>
+                <p id="copyStatus" role="status" class="text-xs mt-3"></p>
+            </div>
             <button id="dlBtn" class="w-full py-5 bg-white text-emerald-700 rounded-2xl font-black shadow-lg">立即下载文件</button>
         </div>
     </div>
@@ -122,13 +128,15 @@ function renderFrame() {
     document.getElementById('totalFrameNum').innerText = state.chunks.length;
     document.getElementById('frameSlider').max = state.chunks.length - 1;
     document.getElementById('frameSlider').value = cur;
-    const payload = [state.tid, state.fileName, state.chunks.length, cur, state.chunks[cur]].join("|");
+    // 在原有五个字段后追加类型，旧接收端仍可按文件接收。
+    const payload = [state.tid, state.fileName, state.chunks.length, cur, state.chunks[cur], state.contentType].join("|");
     state.qr.value = payload;
 }
 
 function prepareSending(isAuto = false) {
     if(!isAuto) clearInterval(state.timer);
     const text = document.getElementById('inputText').value;
+    state.contentType = state.rawData !== null ? 'file' : 'text';
     let b64 = state.rawData || (text ? btoa(unescape(encodeURIComponent(text))) : "");
     if (!b64) return isAuto ? null : alert("请先输入内容或选择文件");
     if(!isAuto) {
@@ -244,8 +252,12 @@ function handleDecoded(text) {
     if(tid !== recv.tid) {
         recv.tid = tid; recv.total = total; recv.received = {}; recv.startTime = Date.now();
         recv.fileName = fullFileName;
+        recv.contentType = p[5] === 'text' ? 'text' : 'file';
+        document.getElementById('successCard').classList.add('hidden');
+        document.getElementById('receivedText').value = '';
+        document.getElementById('dlBtn').onclick = null;
         document.getElementById('taskInfo').classList.remove('hidden');
-        document.getElementById('recvFileName').innerText = fullFileName;
+        document.getElementById('recvFileName').innerText = recv.contentType === 'text' ? '文本消息' : fullFileName;
         document.getElementById('recvGrid').innerHTML = '';
         for(let i=0; i<total; i++) {
             const d = document.createElement('div'); d.id = `dot-${i}`; d.className = 'dot';
@@ -275,8 +287,21 @@ function updateMissingUI() {
 function finalize() {
     stopAllScanning();
     let b64 = ""; for(let i=0; i<recv.total; i++) b64 += recv.received[i];
-    const blob = new Blob([new Uint8Array(atob(b64).split("").map(c=>c.charCodeAt(0)))]);
+    const bytes = new Uint8Array(atob(b64).split("").map(c=>c.charCodeAt(0)));
     document.getElementById('successCard').classList.remove('hidden');
+    const isText = recv.contentType === 'text';
+    const text = isText ? new TextDecoder().decode(bytes) : '';
+    // 仅在完整接收后暂存，切换到发送时一次性载入，保留后续手动编辑。
+    recv.pendingSend = { contentType: recv.contentType, fileName: recv.fileName, text, rawData: isText ? null : b64 };
+    document.getElementById('textResult').classList.toggle('hidden', !isText);
+    document.getElementById('dlBtn').classList.toggle('hidden', isText);
+    document.getElementById('copyStatus').textContent = '';
+    if (isText) {
+        document.getElementById('res-name-full').innerText = '文本接收完成';
+        document.getElementById('receivedText').value = text;
+        return;
+    }
+    const blob = new Blob([bytes]);
     document.getElementById('res-name-full').innerText = "传输成功: " + recv.fileName;
     document.getElementById('dlBtn').onclick = () => {
         const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
@@ -285,8 +310,47 @@ function finalize() {
     };
 }
 
+async function copyReceivedText() {
+    const field = document.getElementById('receivedText');
+    const status = document.getElementById('copyStatus');
+    try {
+        await navigator.clipboard.writeText(field.value);
+        status.textContent = '已复制';
+    } catch (err) {
+        // 离线文件或 HTTP 页面可能没有 Clipboard API，保留手动复制入口。
+        field.focus();
+        field.select();
+        field.setSelectionRange(0, field.value.length);
+        let copied = false;
+        try { copied = document.execCommand('copy'); } catch (err) {}
+        status.textContent = copied ? '已复制' : '请长按或按 Ctrl/Cmd+C 复制已选文本';
+    }
+}
+
 /* --------- 其他 UI 逻辑 --------- */
+function loadReceivedForSending() {
+    const content = recv.pendingSend;
+    if (!content) return;
+    clearInterval(state.timer);
+    state.timer = null;
+    state.isSending = false;
+    state.isPaused = false;
+    state.frameIdx = 0;
+    state.chunks = [];
+    document.getElementById('playerBox').classList.add('hidden');
+    resetFile();
+    document.getElementById('inputText').value = content.text;
+    if (content.contentType !== 'text') {
+        state.rawData = content.rawData;
+        state.fileName = content.fileName;
+        document.getElementById('f-name').innerText = content.fileName;
+        document.getElementById('fileCard').classList.remove('hidden');
+    }
+    recv.pendingSend = null;
+}
+
 function switchTab(t) {
+    if (t === 'send') loadReceivedForSending();
     document.getElementById('panel-send').classList.toggle('hidden', t!=='send');
     document.getElementById('panel-receive').classList.toggle('hidden', t!=='receive');
     const ts = document.getElementById('tab-s');
@@ -304,7 +368,7 @@ function requestFrame(i) { if(state.isSending) { state.frameIdx = i; state.isPau
 function manualSeek(val) { state.frameIdx = parseInt(val); state.isPaused = true; renderFrame(); }
 function step(d) { state.isPaused = true; state.frameIdx = (state.frameIdx + d + state.chunks.length) % state.chunks.length; renderFrame(); }
 function togglePause() { state.isPaused = !state.isPaused; }
-function resetFile() { state.rawData = null; state.fileName = ""; document.getElementById('fileCard').classList.add('hidden'); }
+function resetFile() { state.rawData = null; state.fileName = ""; document.getElementById('fileCard').classList.add('hidden'); document.getElementById('fileInput').value = ''; }
 
 document.getElementById('fileInput').onchange = (e) => {
     const f = e.target.files[0]; if(!f) return;

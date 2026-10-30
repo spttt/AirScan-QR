@@ -91,6 +91,12 @@
         <div id="successCard" class="hidden bg-emerald-600 p-8 rounded-[2.5rem] text-white shadow-2xl text-center">
             <h3 class="font-black text-xl mb-2">🎉 接收完成</h3>
             <p id="finInfo" class="text-xs opacity-80 mb-6"></p>
+            <p class="text-xs opacity-80 mb-4">切换到「发送」即可转发本次内容</p>
+            <div id="textResult" class="hidden mb-4">
+                <textarea id="receivedText" aria-label="接收到的文本" readonly spellcheck="false" rows="8" class="w-full p-4 rounded-2xl bg-white text-slate-900 text-left text-sm max-h-96"></textarea>
+                <button id="copyBtn" onclick="copyReceivedText()" class="w-full mt-4 py-4 bg-white text-emerald-700 rounded-2xl font-black">复制文本</button>
+                <p id="copyStatus" role="status" class="text-xs mt-3"></p>
+            </div>
             <button id="dlBtn" class="w-full py-5 bg-white text-emerald-700 rounded-2xl font-black shadow-lg">立即保存文件</button>
         </div>
     </div>
@@ -132,6 +138,7 @@ function initSender() {
 
 async function startSending() {
     const text = document.getElementById('inputText').value;
+    sender.contentType = sender.rawData ? 'file' : 'text';
     let dataU8;
     if (sender.rawData) {
         dataU8 = sender.rawData;
@@ -164,7 +171,8 @@ async function startSending() {
 
 function tick() {
     const L = sender.chunks.length;
-    const meta = encodeURIComponent(sender.fileName) + ":" + sender.fileSize;
+    // 在元数据末尾追加类型，缺少类型的旧数据继续按文件接收。
+    const meta = encodeURIComponent(sender.fileName) + ":" + sender.fileSize + ":" + sender.contentType;
     // 同时更新4个QR
     for (let i = 0; i < 4; i++) {
         const seed = Math.floor(Math.random() * 1000000);
@@ -194,6 +202,7 @@ let recv = {
 };
 
 async function startScanner(mode) {
+    recv.isFinishing = false;
     const ph = document.getElementById('readerPlaceholder');
     ph.innerText = "正在启动摄像头...";
     recv.active = true;
@@ -210,6 +219,7 @@ async function startScanner(mode) {
 }
 
 async function startScreenScanner() {
+    recv.isFinishing = false;
     const ph = document.getElementById('readerPlaceholder');
     ph.innerText = "请在系统弹窗中选择屏幕...";
     recv.active = true;
@@ -263,12 +273,15 @@ function handleFountainPacket(raw) {
     if (recv.tid !== tid) {
         recv.tid = tid; recv.total = total; recv.solved = {}; recv.queue = [];
         recv.startTime = Date.now(); recv.isFinishing = false;
-        const [n, s] = meta.split(':');
+        const [n, s, contentType] = meta.split(':');
         recv.fileName = decodeURIComponent(n); recv.fileSize = parseInt(s);
+        recv.contentType = contentType === 'text' ? 'text' : 'file';
         recv.currentChunkSize = Utils.b2u(b64).length; // 动态识别块大小
         document.getElementById('recvProgress').classList.remove('hidden');
-        document.getElementById('recvName').innerText = recv.fileName;
+        document.getElementById('recvName').innerText = recv.contentType === 'text' ? '文本消息' : recv.fileName;
         document.getElementById('successCard').classList.add('hidden');
+        document.getElementById('receivedText').value = '';
+        document.getElementById('dlBtn').onclick = null;
     }
 
     if (Object.keys(recv.solved).length < recv.total) {
@@ -279,7 +292,7 @@ function handleFountainPacket(raw) {
 function processPacket(seed, L, data) {
     if (recv.isFinishing) return;
     const rng = Utils.PRNG(seed);
-    const d = Utils.getDegree(L, rng);
+    const d = Math.min(L, Utils.getDegree(L, rng));
     const idxs = [];
     while (idxs.length < d) {
         let x = Math.floor(rng() * L);
@@ -366,8 +379,20 @@ function finalizeRecv() {
         }
     }
 
-    const blob = new Blob([finalU8], { type: 'application/octet-stream' });
     document.getElementById('successCard').classList.remove('hidden');
+    const isText = recv.contentType === 'text';
+    const text = isText ? new TextDecoder().decode(finalU8) : '';
+    // 仅在完整接收后暂存，切换到发送时一次性载入，保留后续手动编辑。
+    recv.pendingSend = { contentType: recv.contentType, fileName: recv.fileName, text, rawData: isText ? null : finalU8 };
+    document.getElementById('textResult').classList.toggle('hidden', !isText);
+    document.getElementById('dlBtn').classList.toggle('hidden', isText);
+    document.getElementById('copyStatus').textContent = '';
+    if (isText) {
+        document.getElementById('finInfo').innerText = '文本接收完成';
+        document.getElementById('receivedText').value = text;
+        return;
+    }
+    const blob = new Blob([finalU8], { type: 'application/octet-stream' });
     document.getElementById('finInfo').innerText = `${recv.fileName} (${(recv.fileSize/1024).toFixed(1)} KB)`;
     document.getElementById('dlBtn').onclick = () => {
         const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
@@ -375,8 +400,43 @@ function finalizeRecv() {
     };
 }
 
+async function copyReceivedText() {
+    const field = document.getElementById('receivedText');
+    const status = document.getElementById('copyStatus');
+    try {
+        await navigator.clipboard.writeText(field.value);
+        status.textContent = '已复制';
+    } catch (err) {
+        // 离线文件或 HTTP 页面可能没有 Clipboard API，保留手动复制入口。
+        field.focus();
+        field.select();
+        field.setSelectionRange(0, field.value.length);
+        let copied = false;
+        try { copied = document.execCommand('copy'); } catch (err) {}
+        status.textContent = copied ? '已复制' : '请长按或按 Ctrl/Cmd+C 复制已选文本';
+    }
+}
+
 /* --------- UI 基础逻辑 --------- */
+function loadReceivedForSending() {
+    const content = recv.pendingSend;
+    if (!content) return;
+    stopSending();
+    sender.timer = null;
+    sender.chunks = [];
+    resetFile();
+    document.getElementById('inputText').value = content.text;
+    if (content.contentType !== 'text') {
+        sender.rawData = content.rawData;
+        sender.fileName = content.fileName;
+        document.getElementById('fileName').innerText = content.fileName;
+        document.getElementById('fileInfo').classList.remove('hidden');
+    }
+    recv.pendingSend = null;
+}
+
 function switchTab(t) {
+    if (t === 'send') loadReceivedForSending();
     document.getElementById('panel-send').classList.toggle('hidden', t!=='send');
     document.getElementById('panel-receive').classList.toggle('hidden', t!=='receive');
     document.getElementById('tab-s').className = t==='send' ? 'flex-1 py-2 rounded-xl tab-active' : 'flex-1 py-2 rounded-xl text-slate-500';
@@ -398,6 +458,7 @@ document.getElementById('fileInput').onchange = (e) => {
 
 function resetFile() {
     sender.rawData = null;
+    sender.fileName = '';
     document.getElementById('fileInfo').classList.add('hidden');
     document.getElementById('fileInput').value = '';
 }

@@ -66,13 +66,41 @@
 由于采用单 HTML 架构，你可以根据需求选择：
 
 1. **在线访问**：通过 GitHub Pages 直接使用。
-2. **本地携带**：右键“另存为” `index-embedded.html`，嵌入式单文件版本，放入 U 盘随身携带。
+2. **本地携带**：下载 [release/index-embedded.html](release/index-embedded.html) 或 [release/airscan-fountain-embedded.html](release/airscan-fountain-embedded.html)，单文件版本可放入 U 盘随身携带。
 3. **内网分发**：直接将 HTML 文件部署在内网静态服务器或共享文件夹中。
 
 ## 版本介绍
 
+两个版本均支持直接输入文字发送：接收后在网页显示原文（保留换行），可点击「复制文本」，无需下载。通过「选文件」发送的内容（包括 `.txt` 文件）仍按文件接收、保存。离线 embedded 版本行为相同。新接收端会将旧发送端未标注类型的数据继续作为文件处理。
+
+手机中转时，完整接收后直接切换到「发送」，本次文本会自动填入输入框，文件会自动成为待发送文件（保留原文件名和内容），再点击开始发送即可转发，无需下载或重新选择。载入后可编辑文本、取消文件或另选文件；再次切换标签不会覆盖这些修改。
+
 1. [index.html](https://topcss.github.io/AirScan-QR/index.html): 正式版，技术路线为单码循环播放传文件，支持摄像头扫码和pc跨应用扫码。
 2. [airscan-fountain.html](https://topcss.github.io/AirScan-QR/airscan-fountain.html) 喷泉版，技术路线为四码同传，解决了丢帧需要重传的问题，极高的提升了传输效率。
+
+## 生成 embedded 离线版本
+
+需要 Python 3.10 或更高版本。在项目目录执行：
+
+```bash
+python build_embedded.py
+```
+
+脚本将源 HTML 中的四个 CDN 脚本（QRious、html5-qrcode、jsQR、Tailwind）内嵌到页面，保留界面和业务逻辑，生成：
+
+```text
+release/
+├── index-embedded.html
+└── airscan-fountain-embedded.html
+```
+
+每次运行都联网重新下载全部依赖，并重新构建两个版本。
+
+日常只修改根目录的 `index.html` 和 `airscan-fountain.html`，然后重新运行脚本，并将源文件与 `release/` 中生成的文件一起提交。
+
+转换脚本的测试可通过 `python -m unittest discover -s tests -v` 运行。
+
+文本/文件传输回归测试可通过 `node --test tests/test_transfer.cjs` 运行（需要 Node.js 18 或更高版本）。
 
 ## 📜 许可证
 
