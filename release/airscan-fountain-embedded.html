@@ -139,6 +139,14 @@ Check your Browserslist config to be sure that your targets are set up correctly
                 <button onclick="resetFile()" class="text-xs font-bold text-red-500">取消</button>
             </div>
 
+            <div class="mb-4 px-2">
+                <div class="flex items-center justify-between gap-4">
+                    <label for="fpsRange" class="text-xs font-bold text-slate-500">发送速度: <span id="fpsVal" class="text-blue-600 font-mono">6</span> FPS</label>
+                    <input type="range" id="fpsRange" min="1" max="15" step="1" value="6" aria-describedby="fpsHint" class="w-1/2" oninput="setSendingFps(this.value)">
+                </div>
+                <p id="fpsHint" class="mt-2 text-xs text-slate-400">老摄像头可调至 3–5 FPS，发送中也可调整。</p>
+            </div>
+
             <div class="grid grid-cols-2 gap-4">
                 <button onclick="document.getElementById('fileInput').click()" class="py-4 bg-gray-100 rounded-2xl font-bold text-sm">📎 选文件</button>
                 <input type="file" id="fileInput" class="hidden">
@@ -179,7 +187,7 @@ Check your Browserslist config to be sure that your targets are set up correctly
                 <div class="flex justify-between items-end">
                     <div>
                         <p id="recvName" class="text-sm font-black text-slate-800 break-all"></p>
-                        <p id="recvRank" class="text-[10px] font-bold text-blue-500 uppercase">Rank: 0/0</p>
+                        <p id="recvRank" class="text-[10px] font-bold text-blue-500">有效数据: 0/0 · 已还原: 0/0</p>
                     </div>
                     <div class="text-right">
                         <span id="pctText" class="text-3xl font-mono font-black text-slate-900">0</span><span class="text-sm font-bold text-slate-400">%</span>
@@ -230,7 +238,7 @@ const Utils = {
 /* --------- 发送端状态 --------- */
 let sender = {
     chunks: [], qrs: [], timer: null, tid: "", 
-    fileName: "", fileSize: 0, chunkSize: 220, fps: 10
+    fileName: "", fileSize: 0, chunkSize: 220, fps: 6
 };
 
 function initSender() {
@@ -269,7 +277,18 @@ async function startSending() {
     document.getElementById('sendStats').innerText = `${sender.chunks.length} Chunks`;
     
     initSender();
+    clearInterval(sender.timer);
     sender.timer = setInterval(tick, 1000 / sender.fps);
+}
+
+function setSendingFps(value) {
+    sender.fps = Math.max(1, Math.min(15, parseInt(value, 10) || 6));
+    document.getElementById('fpsVal').innerText = sender.fps;
+    document.getElementById('fpsRange').value = sender.fps;
+    if (sender.timer !== null) {
+        clearInterval(sender.timer);
+        sender.timer = setInterval(tick, 1000 / sender.fps);
+    }
 }
 
 function tick() {
@@ -295,6 +314,7 @@ function tick() {
 
 function stopSending() {
     clearInterval(sender.timer);
+    sender.timer = null;
     document.getElementById('playerBox').classList.add('hidden');
 }
 
@@ -458,11 +478,15 @@ function xorIdxLists(a, b) {
 }
 
 function updateRecvUI() {
+    if (recv.total <= 0) return;
     const done = Object.keys(recv.solved).length;
-    const pct = Math.min(100, Math.floor((done / recv.total) * 100));
+    // 队列保留的是已消元的独立方程，也属于有效数据；连锁解码只改变
+    // 它们的还原状态，不应让接收进度突然跳跃。重复/相关数据不增加秩。
+    const rank = Math.min(recv.total, done + recv.queue.length);
+    const pct = done >= recv.total ? 100 : Math.min(99, Math.floor((rank / recv.total) * 100));
     document.getElementById('progressBar').style.width = pct + '%';
     document.getElementById('pctText').innerText = pct;
-    document.getElementById('recvRank').innerText = `Rank: ${done} / ${recv.total}`;
+    document.getElementById('recvRank').innerText = `有效数据: ${rank} / ${recv.total} · 已还原: ${done} / ${recv.total}`;
     
     if (done >= recv.total) finalizeRecv();
 }

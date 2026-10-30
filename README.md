@@ -78,6 +78,10 @@
 1. [index.html](https://topcss.github.io/AirScan-QR/index.html): 正式版，技术路线为单码循环播放传文件，支持摄像头扫码和pc跨应用扫码。
 2. [airscan-fountain.html](https://topcss.github.io/AirScan-QR/airscan-fountain.html) 喷泉版，技术路线为四码同传，解决了丢帧需要重传的问题，极高的提升了传输效率。
 
+喷泉版默认以 6 FPS 刷新（原为 10 FPS），发送端可在 1–15 FPS 之间调节，发送中调整会立即生效。老摄像头可先尝试 3–5 FPS。
+
+喷泉版接收进度按已收集的独立有效数据统计，包含尚待还原的数据，同时显示已还原块数；重复或冗余数据不增加进度，完整还原后显示 100%，避免只统计已还原块数造成末段突然跳升。
+
 ## 生成 embedded 离线版本
 
 需要 Python 3.10 或更高版本。在项目目录执行：

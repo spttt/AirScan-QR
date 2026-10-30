@@ -10,6 +10,8 @@ function page(filename) {
     const elements = new Map();
     const downloads = [];
     const blobs = [];
+    const timers = new Map();
+    let nextTimer = 0;
     function element(id, classes = '') {
         const names = new Set(classes.split(/\s+/));
         const el = {
@@ -42,7 +44,9 @@ function page(filename) {
         },
         window: {}, navigator: {}, TextEncoder, TextDecoder, Uint8Array, Blob,
         URL: { createObjectURL(blob) { blobs.push(blob); return 'blob:test'; } },
-        atob, btoa, Math: math, console, setInterval: () => 1, clearInterval() {},
+        atob, btoa, Math: math, console,
+        setInterval(callback, delay) { const id = ++nextTimer; timers.set(id, { callback, delay }); return id; },
+        clearInterval(id) { timers.delete(id); },
         QRious: function () {}, alert(message) { throw new Error(message); },
         FileReader: class {
             readAsArrayBuffer(file) { this.onload({ target: { result: file.bytes.buffer } }); }
@@ -53,7 +57,7 @@ function page(filename) {
     const scripts = [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)];
     vm.runInContext(scripts.at(-1)[1], context);
     run('if (window.onload) window.onload()');
-    return { run, context, elements, downloads, blobs, fountain: filename.includes('fountain') };
+    return { run, context, elements, downloads, blobs, timers, fountain: filename.includes('fountain') };
 }
 
 function transfer(tx, rx, { text, bytes, filename, legacy = false, shortSeed = false, usePrepared = false }) {
@@ -200,6 +204,77 @@ for (const filename of ['index.html', 'airscan-fountain.html',
     });
 
     if (filename.includes('fountain')) {
+        test(`${filename}: pending equations advance progress before cascading decode`, async () => {
+            const tx = page(filename), rx = page(filename);
+            const bytes = Uint8Array.from({ length: 8 * 220 }, (_, i) => (i * 17 + Math.floor(i / 220)) % 256);
+            tx.context.testFile = { name: 'progress.bin', bytes };
+            tx.run("document.getElementById('fileInput').onchange({target: {files: [testFile]}}); startSending()");
+            // Find real encoder seeds for a chain of dependent-on-neighbours equations.
+            // Seven independent pairs contain information but cannot yet expose any block.
+            const seeds = tx.run(`(() => {
+                const wanted = new Set(['0,1', '1,2', '2,3', '3,4', '4,5', '5,6', '6,7', '7', '0,2']);
+                const found = {};
+                for (let seed = 1; seed < 1000000 && wanted.size; seed++) {
+                    const rng = Utils.PRNG(seed);
+                    const degree = Math.min(8, Utils.getDegree(8, rng));
+                    if (degree > 2) continue;
+                    const indices = [];
+                    while (indices.length < degree) {
+                        const index = Math.floor(rng() * 8);
+                        if (!indices.includes(index)) indices.push(index);
+                    }
+                    const key = indices.sort((a, b) => a - b).join(',');
+                    if (wanted.delete(key)) found[key] = seed;
+                }
+                if (wanted.size) throw new Error('Missing packet seeds');
+                return found;
+            })()`);
+            rx.run('recv.active = true');
+            function deliver(key) {
+                tx.context.seed = seeds[key];
+                tx.run('Math.random = () => seed / 1000000; tick()');
+                rx.context.packet = tx.run('sender.qrs[0].value');
+                rx.run('handleFountainPacket(packet)');
+            }
+            for (let i = 0; i < 7; i++) {
+                deliver(`${i},${i + 1}`);
+                assert.equal(rx.run('Object.keys(recv.solved).length'), 0);
+                assert.equal(rx.elements.get('pctText').innerText, Math.floor((i + 1) / 8 * 100));
+                assert.equal(rx.elements.get('successCard').classList.contains('hidden'), true);
+                if (i === 1) {
+                    deliver('0,1'); // Duplicate equation.
+                    deliver('0,2'); // Different packet, but redundant with the first two pairs.
+                    assert.equal(rx.elements.get('pctText').innerText, 25);
+                }
+            }
+            assert.match(rx.elements.get('recvRank').innerText, /有效数据: 7 \/ 8 · 已还原: 0 \/ 8/);
+            deliver('7'); // One final block unlocks all eight blocks at once.
+            assert.equal(rx.elements.get('pctText').innerText, 100);
+            assert.equal(rx.run('Object.keys(recv.solved).length'), 8);
+            rx.elements.get('dlBtn').onclick();
+            assert.deepEqual(new Uint8Array(await rx.blobs.at(-1).arrayBuffer()), bytes);
+        });
+
+        test(`${filename}: slower default and live speed changes keep a single broadcast timer`, () => {
+            const tx = page(filename);
+            assert.equal(tx.run('sender.fps'), 6);
+            tx.elements.get('inputText').value = '慢速摄像头测试';
+            tx.run('startSending()');
+            assert.equal(tx.timers.size, 1);
+            assert.equal([...tx.timers.values()][0].delay, 1000 / 6);
+            const tid = tx.run('sender.tid');
+            tx.run('setSendingFps(3)');
+            assert.equal(tx.run('sender.tid'), tid, 'speed changes preserve transfer identity');
+            assert.equal(tx.timers.size, 1);
+            assert.equal([...tx.timers.values()][0].delay, 1000 / 3);
+            assert.equal(tx.elements.get('fpsVal').innerText, 3);
+            tx.run('startSending()');
+            assert.equal(tx.timers.size, 1, 'restarting must not accumulate timers');
+            tx.run('stopSending(); setSendingFps(5)');
+            assert.equal(tx.timers.size, 0, 'adjusting after stop must not resume broadcasting');
+            assert.equal(tx.run('sender.timer'), null);
+        });
+
         test(`${filename}: single-chunk short sentence completes for degree 2 seed`, () => {
             const tx = page(filename), rx = page(filename);
             transfer(tx, rx, { text: '一句话🙂', shortSeed: true });
