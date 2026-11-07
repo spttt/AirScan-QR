@@ -76,7 +76,7 @@
 手机中转时，完整接收后直接切换到「发送」，本次文本会自动填入输入框，文件会自动成为待发送文件（保留原文件名和内容），再点击开始发送即可转发，无需下载或重新选择。载入后可编辑文本、取消文件或另选文件；再次切换标签不会覆盖这些修改。
 
 1. [index.html](https://topcss.github.io/AirScan-QR/index.html): 正式版，技术路线为单码循环播放传文件，支持摄像头扫码和pc跨应用扫码。
-2. [airscan-fountain.html](https://topcss.github.io/AirScan-QR/airscan-fountain.html) 喷泉版，技术路线为四码同传，解决了丢帧需要重传的问题，极高的提升了传输效率。
+2. [airscan-fountain.html](https://topcss.github.io/AirScan-QR/airscan-fountain.html) 喷泉版，采用上下两个大码同传，方便手机屏幕展示；喷泉编码可容忍扫描丢帧。
 
 喷泉版默认以 6 FPS 刷新（原为 10 FPS），发送端可在 1–15 FPS 之间调节，发送中调整会立即生效。老摄像头可先尝试 3–5 FPS。
 

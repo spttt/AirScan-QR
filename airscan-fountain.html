@@ -10,8 +10,8 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body { font-family: system-ui, -apple-system, sans-serif; -webkit-tap-highlight-color: transparent; }
-        .qr-matrix { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; background: white; padding: 12px; border-radius: 24px; box-shadow: 0 10px 40px rgba(0,0,0,0.1); }
-        .qr-matrix canvas { width: 100% !important; height: auto !important; border-radius: 8px; }
+        .qr-matrix { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; background: white; padding: 12px; border-radius: 24px; box-shadow: 0 10px 40px rgba(0,0,0,0.1); }
+        .qr-matrix canvas { width: min(100%, 42vh) !important; height: auto !important; margin: auto; border-radius: 8px; }
         .progress-bar { transition: width 0.3s ease; }
         .tab-active { background: white; box-shadow: 0 2px 10px rgba(0,0,0,0.05); color: #2563eb; }
     </style>
@@ -55,8 +55,6 @@
             <div class="qr-matrix" id="qrContainer">
                 <canvas id="qr0"></canvas>
                 <canvas id="qr1"></canvas>
-                <canvas id="qr2"></canvas>
-                <canvas id="qr3"></canvas>
             </div>
             <div class="bg-white p-6 rounded-[2rem] text-center">
                 <p class="text-xs font-black text-slate-400 uppercase tracking-widest mb-1">正在循环生成随机喷泉包</p>
@@ -139,8 +137,8 @@ let sender = {
 };
 
 function initSender() {
-    for(let i=0; i<4; i++) {
-        sender.qrs[i] = new QRious({ element: document.getElementById(`qr${i}`), size: 300, level: 'L' });
+    for(let i=0; i<2; i++) {
+        sender.qrs[i] = new QRious({ element: document.getElementById(`qr${i}`), size: 600, level: 'L' });
     }
 }
 
@@ -192,8 +190,8 @@ function tick() {
     const L = sender.chunks.length;
     // 在元数据末尾追加类型，缺少类型的旧数据继续按文件接收。
     const meta = encodeURIComponent(sender.fileName) + ":" + sender.fileSize + ":" + sender.contentType;
-    // 同时更新4个QR
-    for (let i = 0; i < 4; i++) {
+    // 同时更新上下两个QR
+    for (let i = 0; i < sender.qrs.length; i++) {
         const seed = Math.floor(Math.random() * 1000000);
         const rng = Utils.PRNG(seed);
         const d = Math.min(L, Utils.getDegree(L, rng));
@@ -255,8 +253,13 @@ async function startScreenScanner() {
     } catch (e) { ph.innerText = "录屏已取消"; }
 }
 
-function scanLoop() {
+let lastScanTime = 0;
+function scanLoop(timestamp = 0) {
     if (!recv.active) return;
+    requestAnimationFrame(scanLoop);
+    // 解码最多每秒执行10次，避免相机高帧率时重复扫描同一画面。
+    if (timestamp - lastScanTime < 100) return;
+    lastScanTime = timestamp;
     const video = document.getElementById('rv');
     const canvas = document.getElementById('rc');
     if (video.readyState === video.HAVE_ENOUGH_DATA) {
@@ -265,14 +268,13 @@ function scanLoop() {
         const ctx = canvas.getContext('2d');
         ctx.drawImage(video, 0, 0);
         
-        // 分块扫描优化：分别扫描全屏和四个象限（适配矩阵QR）
+        // 两个大码上下排列，分别扫描画面的上半部和下半部。
         const w = canvas.width, h = canvas.height;
+        const split = Math.floor(h * 0.6);
+        const lowerStart = h - split;
         const regions = [
-            {x:0, y:0, w:w, h:h}, // 全屏
-            {x:0, y:0, w:w/2, h:h/2}, // 左上
-            {x:w/2, y:0, w:w/2, h:h/2}, // 右上
-            {x:0, y:h/2, w:w/2, h:h/2}, // 左下
-            {x:w/2, y:h/2, w:w/2, h:h/2} // 右下
+            {x:0, y:0, w:w, h:split},
+            {x:0, y:lowerStart, w:w, h:split}
         ];
 
         regions.forEach(r => {
@@ -281,7 +283,6 @@ function scanLoop() {
             if (code) handleFountainPacket(code.data);
         });
     }
-    requestAnimationFrame(scanLoop);
 }
 
 function handleFountainPacket(raw) {
